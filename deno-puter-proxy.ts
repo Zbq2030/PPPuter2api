@@ -334,8 +334,7 @@ const MODE: Mode = "raw";
 
 interface ChatMessage {
   role: string;
-  // 支持字符串或对象数组（用于多模态输入）
-  content: string | any[];
+  content: string;
 }
 
 interface ChatRequest {
@@ -455,7 +454,41 @@ function normalizeMessages(messages: ChatMessage[]): ChatMessage[] {
   return result;
 }
 
-// ================== 核心逻辑（修改版） ==================
+// ================== 核心逻辑 ==================
+
+async function callPuter(
+  token: string,
+  model: string,
+  messages: ChatMessage[],
+  stream: boolean
+): Promise<Response> {
+  const body: PuterRequest = {
+    interface: "puter-chat-completion",
+    driver: "openrouter",
+    test_mode: false,
+    method: "complete",
+    args: { messages, model, stream }
+  };
+
+  const response = await fetch("https://api.puter.com/drivers/call", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${token}`,
+      "Content-Type": "application/json;charset=UTF-8",
+      "Accept": "*/*",
+      "Origin": "http://localhost:8000",
+      "Referer": "http://localhost:8000/",
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36"
+    },
+    body: JSON.stringify(body)
+  });
+
+  if (!response.ok) {
+    throw new Error(`Puter API error: ${response.status} ${response.statusText}`);
+  }
+
+  return response;
+}
 
 async function handleChatCompletions(request: Request): Promise<Response> {
   // 提取 token
@@ -500,43 +533,8 @@ async function handleChatCompletions(request: Request): Promise<Response> {
       break;
     }
   }
-  
-  // =================================================================
-  // ======================  ↓↓↓ 新增逻辑开始 ↓↓↓ ======================
-  // =================================================================
-
-  // 特殊处理 Gemini 图像生成模型
-  // 你可以在这里添加更多需要特殊处理的模型
-  const imageModels = [
-    'openrouter:google/gemini-2.5-flash-image-preview',
-    'openrouter:google/gemini-2.5-flash-image-preview:free'
-    // 以后有其他类似模型也可以加到这个数组里
-  ];
-  
-  if (imageModels.includes(mappedModel)) {
-    console.log(`[INFO] Applying special format for image model: ${mappedModel}`);
-    
-    finalMessages = finalMessages.map(msg => {
-      // 仅转换角色为 'user' 且内容为简单字符串的消息
-      if (msg.role.toLowerCase() === 'user' && typeof msg.content === 'string') {
-        return {
-          ...msg,
-          // 将字符串内容转换为 Gemini API 期望的数组格式
-          content: [{ type: 'text', text: msg.content }]
-        };
-      }
-      // 对于其他消息（如 assistant 的回复或已经是正确格式的用户消息），保持原样
-      return msg;
-    });
-  }
-
-  // =================================================================
-  // ======================  ↑↑↑ 新增逻辑结束 ↑↑↑ ======================
-  // =================================================================
-
 
   try {
-    // 将处理后（可能已被转换）的消息发送给 Puter
     const puterResponse = await callPuter(token, mappedModel, finalMessages, stream);
 
     if (stream) {
@@ -554,7 +552,6 @@ async function handleChatCompletions(request: Request): Promise<Response> {
     });
   }
 }
-
 
 async function handleStreamResponse(puterResponse: Response, model: string): Promise<Response> {
   const reader = puterResponse.body?.getReader();
